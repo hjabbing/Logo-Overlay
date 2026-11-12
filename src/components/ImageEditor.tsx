@@ -1,492 +1,635 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, Move, Maximize, Trash2, Image as ImageIcon, Check, LayoutGrid, RefreshCcw, ZoomIn, RotateCcw } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  Download,
+  RotateCcw,
+  Undo2,
+  Redo2,
+  Layers,
+  Sparkles,
+  Check,
+  Image as ImageIcon,
+  Sliders,
+  Maximize2,
+  Copy,
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
+import WYSIWYGCanvas from './WYSIWYGCanvas';
+import ControlPanel from './ControlPanel';
+import {
+  AspectRatioType,
+  LogoTransform,
+  PhotoTransform,
+  EditorState,
+  calculateCoverMetrics,
+  calculateLogoMetrics,
+} from '../utils/imageMath';
+import { SAMPLE_PHOTOS, SAMPLE_LOGOS } from '../utils/sampleAssets';
 
-interface Position {
-  x: number;
-  y: number;
-}
+const DEFAULT_PHOTO_TRANSFORM: PhotoTransform = {
+  zoom: 1.0,
+  panNormX: 0,
+  panNormY: 0,
+  brightness: 100,
+  contrast: 100,
+  warmth: 0,
+};
+
+const DEFAULT_LOGO_TRANSFORM: LogoTransform = {
+  centerX: 0.82,
+  centerY: 0.85,
+  scale: 0.22,
+  rotation: 0,
+  opacity: 1.0,
+  shadow: 'medium',
+  tint: 'original',
+  blendMode: 'normal',
+};
 
 export default function ImageEditor() {
-  const [mainImage, setMainImage] = useState<string | null>(null);
-  const [logoImage, setLogoImage] = useState<string | null>(null);
-  const [logoPos, setLogoPos] = useState<Position>({ x: 20, y: 20 });
-  const [logoScale, setLogoScale] = useState(0.2);
-  const [logoOpacity, setLogoOpacity] = useState(1);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState<Position>({ x: 0, y: 0 });
+  // Main assets
+  const [mainImage, setMainImage] = useState<string | null>(SAMPLE_PHOTOS[0].url);
+  const [logoImage, setLogoImage] = useState<string | null>(SAMPLE_LOGOS[0].url);
 
-  // Main Image Transform State
-  const [mainZoom, setMainZoom] = useState(1);
-  const [mainPan, setMainPan] = useState<Position>({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState<Position>({ x: 0, y: 0 });
-  
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mainImgRef = useRef<HTMLImageElement>(null);
-  const logoImgRef = useRef<HTMLImageElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Natural image dimensions
+  const [mainImgDimensions, setMainImgDimensions] = useState({ width: 1920, height: 1440 });
+  const [logoDimensions, setLogoDimensions] = useState({ width: 400, height: 120 });
 
-  const handleMainImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Transforms & Configuration
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioType>('original');
+  const [photoTransform, setPhotoTransform] = useState<PhotoTransform>(DEFAULT_PHOTO_TRANSFORM);
+  const [logoTransform, setLogoTransform] = useState<LogoTransform>(DEFAULT_LOGO_TRANSFORM);
+
+  // History stack for Undo / Redo
+  const [history, setHistory] = useState<EditorState[]>([
+    {
+      aspectRatio: 'original',
+      photoTransform: DEFAULT_PHOTO_TRANSFORM,
+      logoTransform: DEFAULT_LOGO_TRANSFORM,
+    },
+  ]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
+  // UI States
+  const [showGrid, setShowGrid] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [copiedToast, setCopiedToast] = useState(false);
+
+  // Hidden canvas for export
+  const exportCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Measure natural dimensions of an image URL
+  const measureImage = (src: string): Promise<{ width: number; height: number }> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        resolve({
+          width: img.naturalWidth || 1000,
+          height: img.naturalHeight || 800,
+        });
+      };
+      img.onerror = () => {
+        resolve({ width: 1000, height: 800 });
+      };
+      img.src = src;
+    });
+  };
+
+  // Measure initial sample images on mount
+  useEffect(() => {
+    if (SAMPLE_PHOTOS[0]?.url) {
+      measureImage(SAMPLE_PHOTOS[0].url).then(setMainImgDimensions);
+    }
+    if (SAMPLE_LOGOS[0]?.url) {
+      measureImage(SAMPLE_LOGOS[0].url).then(setLogoDimensions);
+    }
+  }, []);
+
+  // Push new state to history
+  const pushHistory = useCallback(
+    (newState: Partial<EditorState>) => {
+      const current = {
+        aspectRatio,
+        photoTransform,
+        logoTransform,
+        ...newState,
+      };
+
+      setHistory((prev) => {
+        const sliced = prev.slice(0, historyIndex + 1);
+        return [...sliced, current];
+      });
+      setHistoryIndex((prev) => prev + 1);
+    },
+    [aspectRatio, photoTransform, logoTransform, historyIndex]
+  );
+
+  // Undo / Redo handlers
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      const target = history[historyIndex - 1];
+      setAspectRatio(target.aspectRatio);
+      setPhotoTransform(target.photoTransform);
+      setLogoTransform(target.logoTransform);
+      setHistoryIndex((prev) => prev - 1);
+    }
+  }, [historyIndex, history]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const target = history[historyIndex + 1];
+      setAspectRatio(target.aspectRatio);
+      setPhotoTransform(target.photoTransform);
+      setLogoTransform(target.logoTransform);
+      setHistoryIndex((prev) => prev + 1);
+    }
+  }, [historyIndex, history]);
+
+  // Keyboard shortcut listener (Cmd/Ctrl + Z / Y)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUndo, handleRedo]);
+
+  // Upload handlers
+  const handleUploadMainImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => setMainImage(event.target?.result as string);
+      reader.onload = async (event) => {
+        const url = event.target?.result as string;
+        setMainImage(url);
+        const dims = await measureImage(url);
+        setMainImgDimensions(dims);
+        setPhotoTransform(DEFAULT_PHOTO_TRANSFORM);
+        pushHistory({ photoTransform: DEFAULT_PHOTO_TRANSFORM });
+      };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => setLogoImage(event.target?.result as string);
+      reader.onload = async (event) => {
+        const url = event.target?.result as string;
+        setLogoImage(url);
+        const dims = await measureImage(url);
+        setLogoDimensions(dims);
+        setLogoTransform(DEFAULT_LOGO_TRANSFORM);
+        pushHistory({ logoTransform: DEFAULT_LOGO_TRANSFORM });
+      };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!logoImage) return;
-    e.stopPropagation();
-    setIsDragging(true);
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    setDragStart({ x: clientX - logoPos.x, y: clientY - logoPos.y });
+  // Sample pickers
+  const handleSelectSamplePhoto = async (url: string) => {
+    setMainImage(url);
+    const dims = await measureImage(url);
+    setMainImgDimensions(dims);
+    setPhotoTransform(DEFAULT_PHOTO_TRANSFORM);
+    pushHistory({ photoTransform: DEFAULT_PHOTO_TRANSFORM });
   };
 
-  const handlePanStart = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!mainImage || isDragging) return;
-    setIsPanning(true);
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    setPanStart({ x: clientX - mainPan.x, y: clientY - mainPan.y });
+  const handleSelectSampleLogo = async (url: string) => {
+    setLogoImage(url);
+    const dims = await measureImage(url);
+    setLogoDimensions(dims);
+    setLogoTransform(DEFAULT_LOGO_TRANSFORM);
+    pushHistory({ logoTransform: DEFAULT_LOGO_TRANSFORM });
   };
 
-  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+  // Drop files onto canvas handler
+  const handleDropFiles = async (photoFile?: File, logoFile?: File) => {
+    if (photoFile) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const url = event.target?.result as string;
+        setMainImage(url);
+        const dims = await measureImage(url);
+        setMainImgDimensions(dims);
+        setPhotoTransform(DEFAULT_PHOTO_TRANSFORM);
+      };
+      reader.readAsDataURL(photoFile);
+    }
 
-    if (isDragging) {
-      setLogoPos({
-        x: clientX - dragStart.x,
-        y: clientY - dragStart.y
-      });
-    } else if (isPanning) {
-      setMainPan({
-        x: clientX - panStart.x,
-        y: clientY - panStart.y
-      });
+    if (logoFile) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const url = event.target?.result as string;
+        setLogoImage(url);
+        const dims = await measureImage(url);
+        setLogoDimensions(dims);
+        setLogoTransform(DEFAULT_LOGO_TRANSFORM);
+      };
+      reader.readAsDataURL(logoFile);
     }
   };
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setIsPanning(false);
+  // Transform updaters
+  const handleUpdatePhotoTransform = (update: Partial<PhotoTransform>) => {
+    setPhotoTransform((prev) => ({ ...prev, ...update }));
   };
 
-  const downloadImage = () => {
-    if (!mainImgRef.current || !logoImgRef.current || !canvasRef.current) return;
+  const handleUpdateLogoTransform = (update: Partial<LogoTransform>) => {
+    setLogoTransform((prev) => ({ ...prev, ...update }));
+  };
 
-    const canvas = canvasRef.current;
+  const handleResetPhotoView = () => {
+    setPhotoTransform(DEFAULT_PHOTO_TRANSFORM);
+    pushHistory({ photoTransform: DEFAULT_PHOTO_TRANSFORM });
+  };
+
+  const handleResetLogoTransform = () => {
+    setLogoTransform(DEFAULT_LOGO_TRANSFORM);
+    pushHistory({ logoTransform: DEFAULT_LOGO_TRANSFORM });
+  };
+
+  const handleResetAll = () => {
+    setMainImage(SAMPLE_PHOTOS[0].url);
+    setLogoImage(SAMPLE_LOGOS[0].url);
+    setAspectRatio('original');
+    setPhotoTransform(DEFAULT_PHOTO_TRANSFORM);
+    setLogoTransform(DEFAULT_LOGO_TRANSFORM);
+    setHistory([
+      {
+        aspectRatio: 'original',
+        photoTransform: DEFAULT_PHOTO_TRANSFORM,
+        logoTransform: DEFAULT_LOGO_TRANSFORM,
+      },
+    ]);
+    setHistoryIndex(0);
+  };
+
+  // Canvas Export Rendering Engine (100% WYSIWYG match)
+  const renderCanvasOutput = async (): Promise<HTMLCanvasElement | null> => {
+    if (!mainImage) return null;
+
+    const mainImg = new Image();
+    mainImg.crossOrigin = 'anonymous';
+    await new Promise((res, rej) => {
+      mainImg.onload = res;
+      mainImg.onerror = rej;
+      mainImg.src = mainImage;
+    });
+
+    let logoImg: HTMLImageElement | null = null;
+    if (logoImage) {
+      logoImg = new Image();
+      logoImg.crossOrigin = 'anonymous';
+      await new Promise((res) => {
+        logoImg!.onload = res;
+        logoImg!.onerror = res;
+        logoImg!.src = logoImage;
+      });
+    }
+
+    // Determine target export canvas dimensions based on chosen aspect ratio
+    let targetAspect = 1;
+    if (aspectRatio === '1:1') targetAspect = 1;
+    else if (aspectRatio === '4:5') targetAspect = 4 / 5;
+    else if (aspectRatio === '16:9') targetAspect = 16 / 9;
+    else if (aspectRatio === '9:16') targetAspect = 9 / 16;
+    else targetAspect = mainImg.naturalWidth / mainImg.naturalHeight;
+
+    // High-resolution export baseline (e.g. 2048px maximum bound)
+    const maxBound = 2048;
+    let exportW = maxBound;
+    let exportH = exportW / targetAspect;
+
+    if (exportH > maxBound) {
+      exportH = maxBound;
+      exportW = exportH * targetAspect;
+    }
+
+    exportW = Math.round(exportW);
+    exportH = Math.round(exportH);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = exportW;
+    canvas.height = exportH;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) return null;
 
-    const mainImg = mainImgRef.current;
-    const logoImg = logoImgRef.current;
-
-    // We want the output to be the size of the original image, but cropped/zoomed
-    // However, to keep it simple and predictable, we'll use the natural dimensions of the main image
-    // as the base, and apply the relative zoom/pan.
-    canvas.width = mainImg.naturalWidth;
-    canvas.height = mainImg.naturalHeight;
-
-    // Calculate relative scales
-    const displayWidth = mainImg.clientWidth;
-    const displayHeight = mainImg.clientHeight;
-    const scaleX = mainImg.naturalWidth / displayWidth;
-    const scaleY = mainImg.naturalHeight / displayHeight;
-
-    // Clear canvas and fill with white (for JPG)
+    // 1. Crisp white background (prevent transparent edges in JPG)
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, exportW, exportH);
 
-    // Draw main image with zoom and pan
-    // We translate and scale the context to match the preview
+    // 2. Render Main Photo with exact cover and pan
+    const photoMetrics = calculateCoverMetrics(
+      exportW,
+      exportH,
+      mainImg.naturalWidth,
+      mainImg.naturalHeight,
+      photoTransform.zoom,
+      photoTransform.panNormX,
+      photoTransform.panNormY
+    );
+
     ctx.save();
-    
-    // The pan and zoom are relative to the display size
-    // We need to convert them to natural size
-    const naturalPanX = mainPan.x * scaleX;
-    const naturalPanY = mainPan.y * scaleY;
-    
-    // Apply transform (Translate then Scale around center)
-    ctx.translate(naturalPanX, naturalPanY);
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.scale(mainZoom, mainZoom);
-    ctx.translate(-canvas.width / 2, -canvas.height / 2);
-    
-    ctx.drawImage(mainImg, 0, 0, canvas.width, canvas.height);
+    // Apply photo tone filters
+    ctx.filter = `brightness(${photoTransform.brightness}%) contrast(${photoTransform.contrast}%) sepia(${Math.max(
+      0,
+      photoTransform.warmth * 0.6
+    )}%) hue-rotate(${photoTransform.warmth < 0 ? photoTransform.warmth * 0.8 : 0}deg)`;
+
+    ctx.drawImage(
+      mainImg,
+      photoMetrics.left,
+      photoMetrics.top,
+      photoMetrics.renderedW,
+      photoMetrics.renderedH
+    );
     ctx.restore();
 
-    // Draw logo
-    if (logoImg) {
-      // The logo width in the preview is a percentage of the container width
-      const logoWidth = canvas.width * logoScale;
-      const logoHeight = logoWidth * (logoImg.naturalHeight / logoImg.naturalWidth);
-      
-      const logoX = logoPos.x * scaleX;
-      const logoY = logoPos.y * scaleY;
+    // 3. Render Logo with exact scale, rotation, shadow, and color tint
+    if (logoImg && logoImg.naturalWidth > 0) {
+      const logoMetrics = calculateLogoMetrics(
+        exportW,
+        exportH,
+        logoImg.naturalWidth,
+        logoImg.naturalHeight,
+        logoTransform
+      );
 
-      ctx.globalAlpha = logoOpacity;
-      ctx.drawImage(logoImg, logoX, logoY, logoWidth, logoHeight);
-      ctx.globalAlpha = 1.0;
+      ctx.save();
+      ctx.translate(logoMetrics.centerX, logoMetrics.centerY);
+      ctx.rotate((logoTransform.rotation * Math.PI) / 180);
+      ctx.globalAlpha = logoTransform.opacity;
+
+      // Drop Shadow
+      if (logoTransform.shadow === 'subtle') {
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+        ctx.shadowBlur = exportW * 0.008;
+        ctx.shadowOffsetY = exportW * 0.004;
+      } else if (logoTransform.shadow === 'medium') {
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        ctx.shadowBlur = exportW * 0.016;
+        ctx.shadowOffsetY = exportW * 0.008;
+      } else if (logoTransform.shadow === 'strong') {
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+        ctx.shadowBlur = exportW * 0.028;
+        ctx.shadowOffsetY = exportW * 0.014;
+      }
+
+      // Color Tint (Whiteout or Blackout)
+      if (logoTransform.tint === 'white' || logoTransform.tint === 'black') {
+        const tintCanvas = document.createElement('canvas');
+        tintCanvas.width = logoImg.naturalWidth;
+        tintCanvas.height = logoImg.naturalHeight;
+        const tintCtx = tintCanvas.getContext('2d');
+        if (tintCtx) {
+          tintCtx.drawImage(logoImg, 0, 0);
+          tintCtx.globalCompositeOperation = 'source-in';
+          tintCtx.fillStyle = logoTransform.tint === 'white' ? '#ffffff' : '#000000';
+          tintCtx.fillRect(0, 0, tintCanvas.width, tintCanvas.height);
+          ctx.drawImage(
+            tintCanvas,
+            -logoMetrics.width / 2,
+            -logoMetrics.height / 2,
+            logoMetrics.width,
+            logoMetrics.height
+          );
+        }
+      } else {
+        ctx.drawImage(
+          logoImg,
+          -logoMetrics.width / 2,
+          -logoMetrics.height / 2,
+          logoMetrics.width,
+          logoMetrics.height
+        );
+      }
+
+      ctx.restore();
     }
 
-    // Download
-    const link = document.createElement('a');
-    link.download = 'branded-image.jpg';
-    link.href = canvas.toDataURL('image/jpeg', 0.9);
-    link.click();
-
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ['#18181b', '#27272a', '#3f3f46']
-    });
+    return canvas;
   };
 
-  const applySmartPlacement = () => {
-    if (!mainImgRef.current || !logoImgRef.current) return;
-    
-    const mainWidth = mainImgRef.current.clientWidth;
-    const mainHeight = mainImgRef.current.clientHeight;
-    const logoWidth = mainWidth * logoScale;
-    const logoHeight = (logoImgRef.current.naturalHeight / logoImgRef.current.naturalWidth) * logoWidth;
+  // Direct JPG Download
+  const handleDownloadJpg = async () => {
+    setIsExporting(true);
+    try {
+      const canvas = await renderCanvasOutput();
+      if (!canvas) return;
 
-    // Place in bottom right with 5% padding
-    setLogoPos({
-      x: mainWidth - logoWidth - (mainWidth * 0.05),
-      y: mainHeight - logoHeight - (mainHeight * 0.05)
-    });
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.download = `branded-image-${Date.now().toString().slice(-6)}.jpg`;
+          link.href = url;
+          link.click();
+          URL.revokeObjectURL(url);
+
+          confetti({
+            particleCount: 120,
+            spread: 80,
+            origin: { y: 0.6 },
+            colors: ['#09090b', '#38bdf8', '#71717a'],
+          });
+        },
+        'image/jpeg',
+        0.92
+      );
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
-  const resetLogoTransform = () => {
-    setLogoPos({ x: 20, y: 20 });
-    setLogoScale(0.2);
-  };
+  // Copy to Clipboard
+  const handleCopyImage = async () => {
+    try {
+      const canvas = await renderCanvasOutput();
+      if (!canvas) return;
 
-  const resetImageTransform = () => {
-    setMainZoom(1);
-    setMainPan({ x: 0, y: 0 });
-  };
-
-  const reset = () => {
-    setMainImage(null);
-    setLogoImage(null);
-    resetLogoTransform();
-    resetImageTransform();
-    setLogoOpacity(1);
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              'image/png': blob,
+            }),
+          ]);
+          setCopiedToast(true);
+          setTimeout(() => setCopiedToast(false), 2500);
+        } catch (err) {
+          console.warn('Clipboard write failed, falling back to download:', err);
+          handleDownloadJpg();
+        }
+      }, 'image/png');
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
-        <header className="mb-8 text-center md:text-left">
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-900 mb-2">Logo Overlay Pro</h1>
-          <p className="text-zinc-500">Brand your images in seconds. Mobile-first, professional results.</p>
-        </header>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Controls Panel */}
-          <div className="lg:col-span-1 space-y-6">
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-4">Assets</h2>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-2">Main Image</label>
-                  <div className="relative group">
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      onChange={handleMainImageUpload}
-                      className="hidden" 
-                      id="main-upload"
-                    />
-                    <label 
-                      htmlFor="main-upload"
-                      className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
-                        mainImage ? 'border-zinc-200 bg-zinc-50' : 'border-zinc-300 hover:border-zinc-400 bg-white'
-                      }`}
-                    >
-                      {mainImage ? (
-                        <div className="flex items-center gap-2 text-green-600">
-                          <Check size={20} />
-                          <span className="text-sm font-medium">Image Loaded</span>
-                        </div>
-                      ) : (
-                        <>
-                          <Upload className="text-zinc-400 mb-2" size={24} />
-                          <span className="text-sm text-zinc-500">Upload Photo</span>
-                        </>
-                      )}
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-2">Logo (PNG)</label>
-                  <div className="relative group">
-                    <input 
-                      type="file" 
-                      accept="image/png" 
-                      onChange={handleLogoUpload}
-                      className="hidden" 
-                      id="logo-upload"
-                    />
-                    <label 
-                      htmlFor="logo-upload"
-                      className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
-                        logoImage ? 'border-zinc-200 bg-zinc-50' : 'border-zinc-300 hover:border-zinc-400 bg-white'
-                      }`}
-                    >
-                      {logoImage ? (
-                        <div className="flex items-center gap-2 text-green-600">
-                          <Check size={20} />
-                          <span className="text-sm font-medium">Logo Loaded</span>
-                        </div>
-                      ) : (
-                        <>
-                          <ImageIcon className="text-zinc-400 mb-2" size={24} />
-                          <span className="text-sm text-zinc-500">Upload PNG Logo</span>
-                        </>
-                      )}
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {mainImage && (
-              <motion.section 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200 space-y-6"
-              >
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Image Controls</h2>
-                
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex justify-between mb-2">
-                      <label className="text-sm font-medium text-zinc-700">Zoom</label>
-                      <span className="text-xs text-zinc-400">{Math.round(mainZoom * 100)}%</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min="1" 
-                      max="3" 
-                      step="0.01" 
-                      value={mainZoom}
-                      onChange={(e) => setMainZoom(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-zinc-900"
-                    />
-                  </div>
-
-                  <button 
-                    onClick={resetImageTransform}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-zinc-200 hover:bg-zinc-50 text-zinc-600 rounded-xl transition-colors text-xs font-medium"
-                  >
-                    <RotateCcw size={14} />
-                    Reset Image View
-                  </button>
-                </div>
-              </motion.section>
-            )}
-
-            {logoImage && (
-              <motion.section 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200 space-y-6"
-              >
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Adjustments</h2>
-                
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex justify-between mb-2">
-                      <label className="text-sm font-medium text-zinc-700">Scale</label>
-                      <span className="text-xs text-zinc-400">{Math.round(logoScale * 100)}%</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min="0.05" 
-                      max="1" 
-                      step="0.01" 
-                      value={logoScale}
-                      onChange={(e) => setLogoScale(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-zinc-900"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between mb-2">
-                      <label className="text-sm font-medium text-zinc-700">Opacity</label>
-                      <span className="text-xs text-zinc-400">{Math.round(logoOpacity * 100)}%</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min="0" 
-                      max="1" 
-                      step="0.01" 
-                      value={logoOpacity}
-                      onChange={(e) => setLogoOpacity(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-zinc-900"
-                    />
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={applySmartPlacement}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border border-zinc-200 hover:bg-zinc-50 text-zinc-600 rounded-xl transition-colors text-xs font-medium"
-                    >
-                      <LayoutGrid size={14} />
-                      Smart Placement
-                    </button>
-                    <button 
-                      onClick={resetLogoTransform}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border border-zinc-200 hover:bg-zinc-50 text-zinc-600 rounded-xl transition-colors text-xs font-medium"
-                    >
-                      <RefreshCcw size={14} />
-                      Reset Transform
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-4 flex gap-2">
-                  <button 
-                    onClick={reset}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-xl transition-colors text-sm font-medium"
-                  >
-                    <Trash2 size={16} />
-                    Reset
-                  </button>
-                  <button 
-                    onClick={downloadImage}
-                    className="flex-[2] flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl transition-colors text-sm font-medium shadow-lg shadow-zinc-200"
-                  >
-                    <Download size={16} />
-                    Download
-                  </button>
-                </div>
-              </motion.section>
-            )}
+    <div className="min-h-screen bg-zinc-100/60 text-zinc-900 flex flex-col font-sans">
+      {/* Top Bar Contract (3 Zones) */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-4 md:px-8 py-3.5 bg-white/95 backdrop-blur-md border-b border-zinc-200">
+        {/* Zone 1: Brand Wordmark */}
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center font-bold text-base shadow-sm">
+            L
           </div>
+          <span className="text-base md:text-lg font-bold tracking-tight text-zinc-900 whitespace-nowrap">
+            Logo Overlay Pro
+          </span>
+        </div>
 
-          {/* Preview Area */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-3xl shadow-xl shadow-zinc-200/50 border border-zinc-200 overflow-hidden min-h-[400px] flex flex-col">
-              <div className="p-4 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
-                <div className="flex gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-zinc-200" />
-                  <div className="w-3 h-3 rounded-full bg-zinc-200" />
-                  <div className="w-3 h-3 rounded-full bg-zinc-200" />
-                </div>
-                <span className="text-xs font-medium text-zinc-400">Preview Canvas</span>
-                <div className="w-10" />
+        {/* Zone 2: Navigation Links / Utility Affordances */}
+        <div className="hidden md:flex items-center gap-4 text-xs font-medium text-zinc-500">
+          <button
+            onClick={handleUndo}
+            disabled={historyIndex <= 0}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 hover:text-zinc-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 size={14} />
+            <span>Undo</span>
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={historyIndex >= history.length - 1}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 hover:text-zinc-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap"
+            title="Redo (Ctrl+Y)"
+          >
+            <Redo2 size={14} />
+            <span>Redo</span>
+          </button>
+          <span className="text-zinc-300">|</span>
+          <span className="text-zinc-400">100% In-Browser & Private</span>
+        </div>
+
+        {/* Zone 3: Primary Export CTA */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleDownloadJpg}
+            disabled={!mainImage || isExporting}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold rounded-xl shadow-sm transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            <Download size={14} />
+            <span>{isExporting ? 'Exporting...' : 'Download JPG'}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Main Studio Viewport */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Interactive WYSIWYG Canvas Stage (7 cols on Desktop) */}
+        <section className="lg:col-span-7 xl:col-span-8 flex flex-col gap-3">
+          <div className="bg-white rounded-2xl md:rounded-3xl shadow-sm border border-zinc-200 overflow-hidden flex flex-col min-h-[460px] md:min-h-[560px]">
+            {/* Canvas Header Toolbar */}
+            <div className="px-4 py-2.5 border-b border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold text-zinc-700">WYSIWYG Live Canvas</span>
+                <span className="text-zinc-300">·</span>
+                <span className="text-[11px] text-zinc-400">Direct interactive manipulation</span>
               </div>
 
-              <div className="flex-1 relative bg-zinc-100 flex items-center justify-center p-4 md:p-8 overflow-hidden">
-                {!mainImage ? (
-                  <div className="text-center space-y-4 max-w-xs">
-                    <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mx-auto text-zinc-300">
-                      <ImageIcon size={32} />
-                    </div>
-                    <p className="text-zinc-400 text-sm">Upload a main image to start branding your content.</p>
-                  </div>
-                ) : (
-                  <div 
-                    ref={containerRef}
-                    className="relative inline-block max-w-full max-h-full shadow-2xl rounded-lg overflow-hidden select-none touch-none bg-white"
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseUp}
-                    onTouchMove={handleMouseMove}
-                    onTouchEnd={handleMouseUp}
-                    onMouseDown={handlePanStart}
-                    onTouchStart={handlePanStart}
-                  >
-                    <div
-                      style={{
-                        transform: `translate(${mainPan.x}px, ${mainPan.y}px) scale(${mainZoom})`,
-                        transition: isPanning ? 'none' : 'transform 0.1s ease-out',
-                        cursor: mainZoom > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default'
-                      }}
-                    >
-                      <img 
-                        ref={mainImgRef}
-                        src={mainImage} 
-                        alt="Main" 
-                        className="max-w-full max-h-[70vh] object-contain block"
-                        draggable={false}
-                      />
-                    </div>
-                    
-                    {logoImage && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          left: `${logoPos.x}px`,
-                          top: `${logoPos.y}px`,
-                          width: `${logoScale * 100}%`,
-                          opacity: logoOpacity,
-                          cursor: isDragging ? 'grabbing' : 'grab',
-                          zIndex: 10
-                        }}
-                        onMouseDown={handleMouseDown}
-                        onTouchStart={handleMouseDown}
-                      >
-                        <img 
-                          ref={logoImgRef}
-                          src={logoImage} 
-                          alt="Logo" 
-                          className="w-full h-auto block"
-                          draggable={false}
-                        />
-                        {/* Visual indicator for dragging */}
-                        <div className="absolute inset-0 border-2 border-zinc-900/20 rounded-sm opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
-                          <Move className="text-zinc-900/40" size={24} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* Mobile Quick Undo / Redo */}
+              <div className="flex md:hidden items-center gap-1">
+                <button
+                  onClick={handleUndo}
+                  disabled={historyIndex <= 0}
+                  className="p-1 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
+                >
+                  <Undo2 size={14} />
+                </button>
+                <button
+                  onClick={handleRedo}
+                  disabled={historyIndex >= history.length - 1}
+                  className="p-1 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
+                >
+                  <Redo2 size={14} />
+                </button>
               </div>
             </div>
-            
-            {mainImage && (
-              <div className="mt-4 flex flex-col items-center gap-2 text-xs text-zinc-400 justify-center">
-                {mainZoom > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Move size={12} />
-                    <span>Drag the image to pan/crop</span>
-                  </div>
-                )}
-                {logoImage && (
-                  <div className="flex items-center gap-2">
-                    <Move size={12} className="text-zinc-900" />
-                    <span className="text-zinc-500">Drag the logo to reposition it</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Hidden Canvas for Export */}
-      <canvas ref={canvasRef} className="hidden" />
+            {/* Interactive Canvas Area */}
+            <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+              <WYSIWYGCanvas
+                mainImage={mainImage}
+                logoImage={logoImage}
+                mainImgDimensions={mainImgDimensions}
+                logoDimensions={logoDimensions}
+                aspectRatio={aspectRatio}
+                photoTransform={photoTransform}
+                logoTransform={logoTransform}
+                onUpdatePhotoTransform={handleUpdatePhotoTransform}
+                onUpdateLogoTransform={handleUpdateLogoTransform}
+                onRemoveLogo={() => setLogoImage(null)}
+                onOpenPhotoPicker={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = 'image/*';
+                  input.onchange = (e) => handleUploadMainImage(e as unknown as React.ChangeEvent<HTMLInputElement>);
+                  input.click();
+                }}
+                onOpenLogoPicker={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = 'image/png,image/svg+xml';
+                  input.onchange = (e) => handleUploadLogo(e as unknown as React.ChangeEvent<HTMLInputElement>);
+                  input.click();
+                }}
+                showGrid={showGrid}
+                onToggleGrid={() => setShowGrid((prev) => !prev)}
+                onDropFiles={handleDropFiles}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Right Column: Tabbed Control Panel (5 cols on Desktop) */}
+        <section className="lg:col-span-5 xl:col-span-4 sticky top-20">
+          <ControlPanel
+            mainImage={mainImage}
+            logoImage={logoImage}
+            mainImgDimensions={mainImgDimensions}
+            logoDimensions={logoDimensions}
+            aspectRatio={aspectRatio}
+            photoTransform={photoTransform}
+            logoTransform={logoTransform}
+            onSelectAspectRatio={(ratio) => {
+              setAspectRatio(ratio);
+              pushHistory({ aspectRatio: ratio });
+            }}
+            onUpdatePhotoTransform={handleUpdatePhotoTransform}
+            onUpdateLogoTransform={handleUpdateLogoTransform}
+            onResetPhotoView={handleResetPhotoView}
+            onResetLogoTransform={handleResetLogoTransform}
+            onSelectSamplePhoto={handleSelectSamplePhoto}
+            onSelectSampleLogo={handleSelectSampleLogo}
+            onUploadMainImage={handleUploadMainImage}
+            onUploadLogo={handleUploadLogo}
+            onDownloadJpg={handleDownloadJpg}
+            onCopyImage={handleCopyImage}
+            onResetAll={handleResetAll}
+            isExporting={isExporting}
+            copiedToast={copiedToast}
+          />
+        </section>
+      </main>
+
+      <canvas ref={exportCanvasRef} className="hidden" />
     </div>
   );
 }
