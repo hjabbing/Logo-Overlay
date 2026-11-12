@@ -11,6 +11,9 @@ import {
   Sliders,
   Maximize2,
   Copy,
+  Grid3X3,
+  Hand,
+  Move,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import WYSIWYGCanvas from './WYSIWYGCanvas';
@@ -71,6 +74,7 @@ export default function ImageEditor() {
 
   // UI States
   const [showGrid, setShowGrid] = useState(false);
+  const [touchPanMode, setTouchPanMode] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [copiedToast, setCopiedToast] = useState(false);
 
@@ -482,15 +486,15 @@ export default function ImageEditor() {
 
   return (
     <div className="min-h-screen bg-zinc-100/60 text-zinc-900 flex flex-col font-sans">
-      {/* Top Bar Contract (3 Zones) */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-4 md:px-8 py-3.5 bg-white/95 backdrop-blur-md border-b border-zinc-200">
+      {/* Top Bar Contract (3 Zones) with z-50 to stay above canvas on scroll */}
+      <header className="sticky top-0 z-50 flex items-center justify-between gap-4 md:gap-8 px-4 md:px-8 py-3 bg-white/95 backdrop-blur-md border-b border-zinc-200">
         {/* Zone 1: Brand Wordmark */}
         <div className="flex items-center gap-3 shrink-0">
           <div className="w-8 h-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center font-bold text-base shadow-sm">
             L
           </div>
           <span className="text-base md:text-lg font-bold tracking-tight text-zinc-900 whitespace-nowrap">
-            Logo Overlay Pro
+            Logo Overlay
           </span>
         </div>
 
@@ -518,48 +522,108 @@ export default function ImageEditor() {
           <span className="text-zinc-400">100% In-Browser & Private</span>
         </div>
 
-        {/* Zone 3: Primary Export CTA */}
+        {/* Zone 3: Primary Copy & Download CTAs in sticky header */}
         <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleCopyImage}
+            disabled={!mainImage}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 text-xs font-semibold rounded-xl shadow-xs transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            title="Copy image to clipboard"
+          >
+            {copiedToast ? (
+              <>
+                <Check size={14} className="text-emerald-600" />
+                <span className="text-emerald-700">Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy size={14} />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+
           <button
             onClick={handleDownloadJpg}
             disabled={!mainImage || isExporting}
-            className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold rounded-xl shadow-sm transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            className="flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold rounded-xl shadow-sm transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
           >
             <Download size={14} />
-            <span>{isExporting ? 'Exporting...' : 'Download JPG'}</span>
+            <span>{isExporting ? 'Exporting...' : 'Download'}</span>
           </button>
         </div>
       </header>
 
       {/* Main Studio Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Interactive WYSIWYG Canvas Stage (7 cols on Desktop) */}
-        <section className="lg:col-span-7 xl:col-span-8 flex flex-col gap-3">
-          <div className="bg-white rounded-2xl md:rounded-3xl shadow-sm border border-zinc-200 overflow-hidden flex flex-col min-h-[460px] md:min-h-[560px]">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* Left Column: Interactive WYSIWYG Canvas Stage (7 cols on Desktop) - relative z-10 ensures it stays under sticky header */}
+        <section className="lg:col-span-7 xl:col-span-8 flex flex-col gap-3 relative z-10">
+          <div className="bg-white rounded-2xl md:rounded-3xl shadow-sm border border-zinc-200 overflow-hidden flex flex-col">
             {/* Canvas Header Toolbar */}
-            <div className="px-4 py-2.5 border-b border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-semibold text-zinc-700">WYSIWYG Live Canvas</span>
+            <div className="px-3 sm:px-4 py-2 border-b border-zinc-100 bg-zinc-50/70 flex items-center justify-between">
+              {/* Unboxed clean metadata (zero pills) */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-zinc-900 uppercase tracking-wide">
+                  {aspectRatio}
+                </span>
                 <span className="text-zinc-300">·</span>
-                <span className="text-[11px] text-zinc-400">Direct interactive manipulation</span>
+                <span className="text-[11px] text-zinc-500 font-mono">
+                  {mainImgDimensions.width > 0 && mainImgDimensions.height > 0
+                    ? `${mainImgDimensions.width}×${mainImgDimensions.height}`
+                    : 'WYSIWYG'}
+                </span>
               </div>
 
-              {/* Mobile Quick Undo / Redo */}
-              <div className="flex md:hidden items-center gap-1">
+              {/* Right Toolbar Controls */}
+              <div className="flex items-center gap-1.5">
+                {/* Touch Pan Toggle when Zoomed */}
+                {photoTransform.zoom > 1.02 && (
+                  <button
+                    onClick={() => setTouchPanMode((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                      touchPanMode
+                        ? 'bg-sky-500 text-white shadow-xs'
+                        : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+                    }`}
+                    title="Toggle touch pan on live canvas"
+                  >
+                    <Hand size={12} />
+                    <span>{touchPanMode ? 'Pan: On' : 'Pan Mode'}</span>
+                  </button>
+                )}
+
+                {/* Rule of Thirds Grid Toggle */}
                 <button
-                  onClick={handleUndo}
-                  disabled={historyIndex <= 0}
-                  className="p-1 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
+                  onClick={() => setShowGrid((prev) => !prev)}
+                  className={`p-1.5 rounded-lg border transition-all ${
+                    showGrid
+                      ? 'bg-zinc-900 text-white border-zinc-900 shadow-xs'
+                      : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                  }`}
+                  title="Toggle 3x3 Composition Grid"
                 >
-                  <Undo2 size={14} />
+                  <Grid3X3 size={13} />
                 </button>
-                <button
-                  onClick={handleRedo}
-                  disabled={historyIndex >= history.length - 1}
-                  className="p-1 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
-                >
-                  <Redo2 size={14} />
-                </button>
+
+                {/* Mobile Quick Undo / Redo */}
+                <div className="flex md:hidden items-center gap-0.5 pl-1 border-l border-zinc-200">
+                  <button
+                    onClick={handleUndo}
+                    disabled={historyIndex <= 0}
+                    className="p-1.5 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
+                    title="Undo"
+                  >
+                    <Undo2 size={13} />
+                  </button>
+                  <button
+                    onClick={handleRedo}
+                    disabled={historyIndex >= history.length - 1}
+                    className="p-1.5 rounded-lg border border-zinc-200 text-zinc-600 disabled:opacity-30"
+                    title="Redo"
+                  >
+                    <Redo2 size={13} />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -573,6 +637,8 @@ export default function ImageEditor() {
                 aspectRatio={aspectRatio}
                 photoTransform={photoTransform}
                 logoTransform={logoTransform}
+                touchPanMode={touchPanMode}
+                onToggleTouchPanMode={() => setTouchPanMode((prev) => !prev)}
                 onUpdatePhotoTransform={handleUpdatePhotoTransform}
                 onUpdateLogoTransform={handleUpdateLogoTransform}
                 onRemoveLogo={() => setLogoImage(null)}
@@ -580,14 +646,16 @@ export default function ImageEditor() {
                   const input = document.createElement('input');
                   input.type = 'file';
                   input.accept = 'image/*';
-                  input.onchange = (e) => handleUploadMainImage(e as unknown as React.ChangeEvent<HTMLInputElement>);
+                  input.onchange = (e) =>
+                    handleUploadMainImage(e as unknown as React.ChangeEvent<HTMLInputElement>);
                   input.click();
                 }}
                 onOpenLogoPicker={() => {
                   const input = document.createElement('input');
                   input.type = 'file';
                   input.accept = 'image/png,image/svg+xml';
-                  input.onchange = (e) => handleUploadLogo(e as unknown as React.ChangeEvent<HTMLInputElement>);
+                  input.onchange = (e) =>
+                    handleUploadLogo(e as unknown as React.ChangeEvent<HTMLInputElement>);
                   input.click();
                 }}
                 showGrid={showGrid}
@@ -608,6 +676,8 @@ export default function ImageEditor() {
             aspectRatio={aspectRatio}
             photoTransform={photoTransform}
             logoTransform={logoTransform}
+            touchPanMode={touchPanMode}
+            onToggleTouchPanMode={() => setTouchPanMode((prev) => !prev)}
             onSelectAspectRatio={(ratio) => {
               setAspectRatio(ratio);
               pushHistory({ aspectRatio: ratio });
@@ -620,11 +690,7 @@ export default function ImageEditor() {
             onSelectSampleLogo={handleSelectSampleLogo}
             onUploadMainImage={handleUploadMainImage}
             onUploadLogo={handleUploadLogo}
-            onDownloadJpg={handleDownloadJpg}
-            onCopyImage={handleCopyImage}
             onResetAll={handleResetAll}
-            isExporting={isExporting}
-            copiedToast={copiedToast}
           />
         </section>
       </main>

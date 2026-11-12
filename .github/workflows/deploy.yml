@@ -6,13 +6,12 @@ on:
       - main
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+# Permissions for GitHub Pages and committing to gh-pages branch
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
-# Allow one concurrent deployment
 concurrency:
   group: 'pages'
   cancel-in-progress: false
@@ -36,17 +35,36 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
+      - name: Setup GitHub Pages configuration
+        id: pages
+        uses: actions/configure-pages@v5
+        continue-on-error: true
+
       - name: Build project
         run: npm run build
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path || './' }}
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Ensure .nojekyll exists
+        run: touch ./dist/.nojekyll
 
+      # Deployment Path 1: Official GitHub Actions Pages Artifact
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
+        continue-on-error: true
 
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      # Deployment Path 2: Push compiled build to gh-pages branch (Fallback for "Deploy from a branch")
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: true

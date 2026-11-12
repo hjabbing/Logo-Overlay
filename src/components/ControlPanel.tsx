@@ -21,8 +21,6 @@ import {
   ArrowDown,
   ArrowDownRight,
   SlidersHorizontal,
-  Download,
-  Copy,
   Plus,
   Minus,
 } from 'lucide-react';
@@ -44,6 +42,8 @@ interface ControlPanelProps {
   aspectRatio: AspectRatioType;
   photoTransform: PhotoTransform;
   logoTransform: LogoTransform;
+  touchPanMode: boolean;
+  onToggleTouchPanMode: () => void;
   onSelectAspectRatio: (ratio: AspectRatioType) => void;
   onUpdatePhotoTransform: (update: Partial<PhotoTransform>) => void;
   onUpdateLogoTransform: (update: Partial<LogoTransform>) => void;
@@ -53,11 +53,7 @@ interface ControlPanelProps {
   onSelectSampleLogo: (url: string) => void;
   onUploadMainImage: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onUploadLogo: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onDownloadJpg: () => void;
-  onCopyImage: () => void;
   onResetAll: () => void;
-  isExporting: boolean;
-  copiedToast: boolean;
 }
 
 export default function ControlPanel({
@@ -68,6 +64,8 @@ export default function ControlPanel({
   aspectRatio,
   photoTransform,
   logoTransform,
+  touchPanMode,
+  onToggleTouchPanMode,
   onSelectAspectRatio,
   onUpdatePhotoTransform,
   onUpdateLogoTransform,
@@ -77,11 +75,7 @@ export default function ControlPanel({
   onSelectSampleLogo,
   onUploadMainImage,
   onUploadLogo,
-  onDownloadJpg,
-  onCopyImage,
   onResetAll,
-  isExporting,
-  copiedToast,
 }: ControlPanelProps) {
   const [activeTab, setActiveTab] = useState<'framing' | 'logo' | 'style' | 'samples'>(
     logoImage ? 'logo' : 'framing'
@@ -337,18 +331,100 @@ export default function ControlPanel({
                 </button>
               </div>
               <p className="text-[11px] text-zinc-400 mt-1.5">
-                Pinch or scroll directly on the canvas to zoom, then drag to crop position.
+                Zoom the image to crop. Use the directional buttons or canvas to adjust position.
               </p>
             </div>
 
+            {/* Directional Crop Position Controls (Active when zoomed) */}
+            {photoTransform.zoom > 1.02 && (
+              <div className="p-3 bg-zinc-50 rounded-xl border border-zinc-200/80 space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold text-zinc-700">Crop Position</span>
+                  <button
+                    onClick={onToggleTouchPanMode}
+                    className={`text-[11px] px-2 py-0.5 rounded-md font-medium transition-colors ${
+                      touchPanMode
+                        ? 'bg-sky-500 text-white'
+                        : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300'
+                    }`}
+                  >
+                    {touchPanMode ? 'Pan Canvas: Active' : 'Touch to Pan'}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5 max-w-[160px] mx-auto">
+                  <div />
+                  <button
+                    onClick={() =>
+                      onUpdatePhotoTransform({
+                        panNormY: Math.max(-1, photoTransform.panNormY - 0.15),
+                      })
+                    }
+                    className="p-2 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-100 flex items-center justify-center text-zinc-700"
+                    title="Nudge Up"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <div />
+                  <button
+                    onClick={() =>
+                      onUpdatePhotoTransform({
+                        panNormX: Math.max(-1, photoTransform.panNormX - 0.15),
+                      })
+                    }
+                    className="p-2 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-100 flex items-center justify-center text-zinc-700"
+                    title="Nudge Left"
+                  >
+                    <ArrowLeft size={14} />
+                  </button>
+                  <button
+                    onClick={() =>
+                      onUpdatePhotoTransform({
+                        panNormX: 0,
+                        panNormY: 0,
+                      })
+                    }
+                    className="p-2 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-100 flex items-center justify-center text-zinc-700"
+                    title="Center Photo"
+                  >
+                    <Circle size={10} className="fill-zinc-400 text-zinc-400" />
+                  </button>
+                  <button
+                    onClick={() =>
+                      onUpdatePhotoTransform({
+                        panNormX: Math.min(1, photoTransform.panNormX + 0.15),
+                      })
+                    }
+                    className="p-2 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-100 flex items-center justify-center text-zinc-700"
+                    title="Nudge Right"
+                  >
+                    <ArrowRight size={14} />
+                  </button>
+                  <div />
+                  <button
+                    onClick={() =>
+                      onUpdatePhotoTransform({
+                        panNormY: Math.min(1, photoTransform.panNormY + 0.15),
+                      })
+                    }
+                    className="p-2 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-100 flex items-center justify-center text-zinc-700"
+                    title="Nudge Down"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                  <div />
+                </div>
+              </div>
+            )}
+
             {/* Reset Photo Transform */}
-            <div className="pt-2">
+            <div className="pt-1">
               <button
                 onClick={onResetPhotoView}
                 className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl border border-zinc-200 hover:bg-zinc-50 text-zinc-600 text-xs font-medium transition-colors"
               >
                 <RotateCcw size={13} />
-                Reset Photo View & Pan
+                Reset Photo View & Crop
               </button>
             </div>
           </div>
@@ -738,44 +814,6 @@ export default function ControlPanel({
             </div>
           </div>
         )}
-      </div>
-
-      {/* Bottom Sticky Action / Export Bar */}
-      <div className="p-4 border-t border-zinc-100 bg-zinc-50/80 space-y-2">
-        <div className="flex gap-2">
-          <button
-            onClick={onCopyImage}
-            disabled={!mainImage}
-            className="flex-1 flex items-center justify-center gap-1.5 py-3 px-3 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 text-xs font-semibold transition-all shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {copiedToast ? (
-              <>
-                <Check size={14} className="text-emerald-600" />
-                <span className="text-emerald-700">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy size={14} />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={onDownloadJpg}
-            disabled={!mainImage || isExporting}
-            className="flex-[2] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold shadow-md shadow-zinc-900/15 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Download size={15} />
-            <span>{isExporting ? 'Generating JPG...' : 'Download JPG'}</span>
-          </button>
-        </div>
-
-        <div className="text-center text-[10px] text-zinc-400 flex items-center justify-center gap-2">
-          <span>High-Quality 92% JPG</span>
-          <span>·</span>
-          <span>Exact WYSIWYG Output</span>
-        </div>
       </div>
     </div>
   );

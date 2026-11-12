@@ -14,15 +14,23 @@ View your app in AI Studio: https://ai.studio/apps/5bd0d652-5bb4-43e0-a887-76ac6
 
 This repository includes a preconfigured GitHub Actions workflow in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) that builds and deploys the app to GitHub Pages on every push to `main`.
 
-### One-Time Setup in GitHub
+### Important: Why You May See a Blank Page & How to Fix It
 
-1. Push this repository to GitHub.
-2. In your GitHub repository, open **Settings** (top navigation tab).
-3. In the left sidebar, click **Pages** (under the "Code and automation" section).
-4. Under **Build and deployment** > **Source**, change the dropdown from *Deploy from a branch* to **GitHub Actions**.
-5. That's it! Any push to `main` will automatically build and publish your site.
+If your published GitHub Page is currently blank and viewing the source code shows `index.html` referencing `<script src="/src/main.tsx">`:
 
-You can also trigger a deployment manually anytime by opening the **Actions** tab in GitHub, choosing **Deploy to GitHub Pages**, and clicking **Run workflow**.
+> **Cause:** By default, GitHub Pages is set to **"Deploy from a branch: main / (root)"**. This serves the raw, uncompiled repository root rather than the compiled output. Web browsers cannot execute raw `.tsx` files directly, which results in a blank page.
+
+**Solution (Choose either option below):**
+
+* **Option A (Recommended - GitHub Actions):**
+  1. Go to **Settings** > **Pages** in your repository.
+  2. Under **Build and deployment** > **Source**, change from *Deploy from a branch* to **GitHub Actions**.
+  3. Go to the **Actions** tab, select **Deploy to GitHub Pages**, and click **Run workflow** (or simply make any commit to `main`).
+
+* **Option B (Branch Deployment):**
+  1. Once the GitHub Actions workflow runs, it automatically pushes the compiled site to the `gh-pages` branch.
+  2. In **Settings** > **Pages**, under **Source**, leave *Deploy from a branch* selected.
+  3. Under **Branch**, select **`gh-pages`** and folder **`/ (root)`**, then click **Save**.
 
 ---
 

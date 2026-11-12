@@ -1,14 +1,13 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
-  Move,
   RotateCw,
   Trash2,
   Maximize2,
-  Grid3X3,
-  Sparkles,
   Upload,
   Layers,
-  ZoomIn,
+  Move,
+  Hand,
+  MousePointer,
 } from 'lucide-react';
 import {
   LogoTransform,
@@ -35,6 +34,8 @@ interface WYSIWYGCanvasProps {
   onOpenLogoPicker: () => void;
   showGrid: boolean;
   onToggleGrid: () => void;
+  touchPanMode: boolean;
+  onToggleTouchPanMode: () => void;
   onDropFiles?: (mainFile?: File, logoFile?: File) => void;
 }
 
@@ -63,14 +64,16 @@ export default function WYSIWYGCanvas({
   onOpenLogoPicker,
   showGrid,
   onToggleGrid,
+  touchPanMode,
+  onToggleTouchPanMode,
   onDropFiles,
 }: WYSIWYGCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
 
   const [frameDimensions, setFrameDimensions] = useState<{ width: number; height: number }>({
-    width: 600,
-    height: 400,
+    width: 500,
+    height: 380,
   });
 
   const [isLogoSelected, setIsLogoSelected] = useState(true);
@@ -84,9 +87,10 @@ export default function WYSIWYGCanvas({
   const updateFrameSize = useCallback(() => {
     if (!containerRef.current) return;
     const cont = containerRef.current;
-    const padding = 32; // outer safe padding
-    const maxW = Math.max(260, cont.clientWidth - padding);
-    const maxH = Math.max(260, cont.clientHeight - padding);
+    const paddingX = cont.clientWidth < 640 ? 16 : 32;
+    const paddingY = cont.clientHeight < 400 ? 16 : 32;
+    const maxW = Math.max(200, cont.clientWidth - paddingX);
+    const maxH = Math.max(200, cont.clientHeight - paddingY);
 
     // Compute aspect ratio
     const currentOption = ASPECT_RATIOS.find((r) => r.id === aspectRatio);
@@ -145,7 +149,7 @@ export default function WYSIWYGCanvas({
   const showCenterGuideY =
     isLogoSelected && Math.abs(logoTransform.centerY - 0.5) < 0.015 && dragMode !== 'none';
 
-  // Handle pointer down on Logo
+  // Handle pointer down on Logo (direct touch/mouse manipulation)
   const handleLogoPointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     setIsLogoSelected(true);
@@ -174,8 +178,17 @@ export default function WYSIWYGCanvas({
   };
 
   // Handle pointer down on background (Photo Pan)
+  // CRITICAL FIX: On touch devices, if NOT in touchPanMode, do NOT capture pointer!
+  // This allows the natural mobile page scroll to work without getting stuck!
   const handleCanvasPointerDown = (e: React.PointerEvent) => {
     if (!mainImage) return;
+
+    const isTouch = e.pointerType === 'touch';
+    // If it's a touch event and user hasn't explicitly activated Pan Mode, allow page scroll!
+    if (isTouch && !touchPanMode) {
+      return;
+    }
+
     setDragMode('pan-photo');
     setDragStart({ x: e.clientX, y: e.clientY });
     setInitialPan({
@@ -193,11 +206,9 @@ export default function WYSIWYGCanvas({
     const deltaY = e.clientY - dragStart.y;
 
     if (dragMode === 'pan-photo') {
-      // Photo Pan
       const maxPanX = photoMetrics.maxPanX || 1;
       const maxPanY = photoMetrics.maxPanY || 1;
 
-      // Sensitivity factor
       const nextNormX = maxPanX > 0 ? initialPan.x + deltaX / maxPanX : 0;
       const nextNormY = maxPanY > 0 ? initialPan.y + deltaY / maxPanY : 0;
 
@@ -206,7 +217,6 @@ export default function WYSIWYGCanvas({
         panNormY: Math.max(-1, Math.min(1, nextNormY)),
       });
     } else if (dragMode === 'move-logo') {
-      // Logo Move
       const normDeltaX = deltaX / frameDimensions.width;
       const normDeltaY = deltaY / frameDimensions.height;
 
@@ -222,14 +232,12 @@ export default function WYSIWYGCanvas({
         centerY: Math.max(0.05, Math.min(0.95, nextY)),
       });
     } else if (dragMode.startsWith('resize-logo-')) {
-      // Logo Resize from corners
       const factor = dragMode.includes('e') ? deltaX : -deltaX;
       const deltaScale = (factor / frameDimensions.width) * 1.5;
       const nextScale = Math.max(0.05, Math.min(0.85, initialLogoTransform.scale + deltaScale));
 
       onUpdateLogoTransform({ scale: nextScale });
     } else if (dragMode === 'rotate-logo') {
-      // Logo Rotate
       if (!frameRef.current) return;
       const rect = frameRef.current.getBoundingClientRect();
       const logoCenterScreenX = rect.left + logoMetrics.centerX;
@@ -238,11 +246,9 @@ export default function WYSIWYGCanvas({
       const angleRad = Math.atan2(e.clientY - logoCenterScreenY, e.clientX - logoCenterScreenX);
       let angleDeg = Math.round((angleRad * 180) / Math.PI) - 90;
 
-      // Normalize to -180 .. 180
       while (angleDeg > 180) angleDeg -= 360;
       while (angleDeg < -180) angleDeg += 360;
 
-      // Snap near cardinal angles
       const cardinals = [0, 90, 180, -90, -180];
       for (const card of cardinals) {
         if (Math.abs(angleDeg - card) < 4) {
@@ -267,9 +273,10 @@ export default function WYSIWYGCanvas({
     }
   };
 
-  // Wheel zoom on photo
+  // Wheel zoom on desktop
   const handleWheel = (e: React.WheelEvent) => {
     if (!mainImage) return;
+    // Only zoom when mouse is over canvas
     e.preventDefault();
     const zoomStep = e.deltaY < 0 ? 0.08 : -0.08;
     const nextZoom = Math.max(1.0, Math.min(3.5, photoTransform.zoom + zoomStep));
@@ -294,8 +301,9 @@ export default function WYSIWYGCanvas({
     const files = Array.from(e.dataTransfer.files) as File[];
     if (files.length === 0) return;
 
-    // Check if one is a PNG logo and other is photo
-    const pngLogo = files.find((f: File) => f.type === 'image/png' || f.name.toLowerCase().endsWith('.png'));
+    const pngLogo = files.find(
+      (f: File) => f.type === 'image/png' || f.name.toLowerCase().endsWith('.png')
+    );
     const photo = files.find((f: File) => f !== pngLogo && f.type.startsWith('image/'));
 
     if (photo && pngLogo) {
@@ -313,10 +321,8 @@ export default function WYSIWYGCanvas({
     let colorFilter = '';
 
     if (logoTransform.tint === 'white') {
-      // Invert & brighten to white
       colorFilter = 'brightness(0) invert(1)';
     } else if (logoTransform.tint === 'black') {
-      // Turn to pure black
       colorFilter = 'brightness(0)';
     }
 
@@ -324,7 +330,10 @@ export default function WYSIWYGCanvas({
   };
 
   // Photo tone filter
-  const photoFilter = `brightness(${photoTransform.brightness}%) contrast(${photoTransform.contrast}%) sepia(${Math.max(0, photoTransform.warmth * 0.6)}%) hue-rotate(${photoTransform.warmth < 0 ? photoTransform.warmth * 0.8 : 0}deg)`;
+  const photoFilter = `brightness(${photoTransform.brightness}%) contrast(${photoTransform.contrast}%) sepia(${Math.max(
+    0,
+    photoTransform.warmth * 0.6
+  )}%) hue-rotate(${photoTransform.warmth < 0 ? photoTransform.warmth * 0.8 : 0}deg)`;
 
   return (
     <div
@@ -332,73 +341,44 @@ export default function WYSIWYGCanvas({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`relative w-full h-full min-h-[420px] md:min-h-[520px] flex items-center justify-center p-3 md:p-6 select-none touch-none transition-colors duration-200 ${
+      /* CRITICAL: touch-pan-y allows normal vertical finger scrolling on mobile */
+      className={`relative w-full h-[320px] sm:h-[380px] md:h-[460px] lg:h-[520px] flex items-center justify-center p-2 sm:p-4 select-none touch-pan-y transition-colors duration-200 ${
         isDragOver ? 'bg-zinc-100 ring-2 ring-zinc-400 ring-dashed' : 'bg-zinc-100/70'
       }`}
     >
-      {/* Aspect Ratio & Frame Badge */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
-        <div className="px-3 py-1.5 rounded-lg bg-white/90 backdrop-blur-md shadow-sm border border-zinc-200 text-xs font-medium text-zinc-700 flex items-center gap-2">
-          <span className="font-semibold text-zinc-900 uppercase tracking-wider text-[11px]">
-            {aspectRatio}
-          </span>
-          <span className="text-zinc-300">·</span>
-          <span className="text-zinc-500 font-mono text-[11px]">
-            {frameDimensions.width} × {frameDimensions.height} px
-          </span>
-        </div>
-
-        {/* Rule of Thirds Toggle */}
-        <button
-          onClick={onToggleGrid}
-          title="Toggle Rule of Thirds Grid"
-          className={`p-1.5 rounded-lg border transition-all ${
-            showGrid
-              ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
-              : 'bg-white/90 text-zinc-600 border-zinc-200 hover:text-zinc-900'
-          }`}
-        >
-          <Grid3X3 size={16} />
-        </button>
-      </div>
-
       {/* Main WYSIWYG Frame Container */}
       {!mainImage ? (
-        // Empty State with Drop Area & Quick Demo Action
-        <div className="w-full max-w-md p-8 bg-white rounded-3xl shadow-sm border-2 border-dashed border-zinc-200 text-center flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center text-zinc-500">
-            <Upload size={28} />
+        <div className="w-full max-w-sm p-6 bg-white rounded-2xl shadow-sm border-2 border-dashed border-zinc-200 text-center flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-400">
+            <Upload size={22} />
           </div>
           <div>
-            <h3 className="text-base font-semibold text-zinc-900 mb-1">Upload Photo to Begin</h3>
-            <p className="text-xs text-zinc-500 max-w-xs">
-              Drag & drop your main photo and PNG logo directly here, or select from file picker.
+            <h3 className="text-sm font-semibold text-zinc-900 mb-0.5">Upload Photo</h3>
+            <p className="text-[11px] text-zinc-500 max-w-xs">
+              Drag & drop photo and PNG logo, or choose from files.
             </p>
           </div>
-
-          <div className="flex flex-col sm:flex-row gap-3 w-full mt-2">
-            <button
-              onClick={onOpenPhotoPicker}
-              className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors shadow-sm"
-            >
-              Choose Photo
-            </button>
-          </div>
+          <button
+            onClick={onOpenPhotoPicker}
+            className="w-full px-4 py-2 rounded-xl bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors shadow-xs"
+          >
+            Select Photo
+          </button>
         </div>
       ) : (
-        // Active Interactive Frame
         <div
           ref={frameRef}
           style={{
             width: `${frameDimensions.width}px`,
             height: `${frameDimensions.height}px`,
+            touchAction: touchPanMode ? 'none' : 'pan-y',
           }}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onWheel={handleWheel}
-          className={`relative rounded-xl overflow-hidden shadow-2xl border border-zinc-300/80 bg-zinc-900 cursor-${
-            dragMode === 'pan-photo' ? 'grabbing' : photoTransform.zoom > 1.05 ? 'grab' : 'default'
+          className={`relative rounded-xl overflow-hidden shadow-xl border border-zinc-300/80 bg-zinc-900 ${
+            touchPanMode ? 'cursor-grab ring-2 ring-sky-500/40' : 'cursor-default'
           }`}
         >
           {/* Main Photo Layer */}
@@ -431,8 +411,8 @@ export default function WYSIWYGCanvas({
               <div className="border-r border-b border-white/60" />
               <div className="border-r border-b border-white/60" />
               <div className="border-b border-white/60" />
-              <div className="border-r border-white/60" />
-              <div className="border-r border-white/60" />
+              <div className="border-r border-b border-white/60" />
+              <div className="border-r border-b border-white/60" />
               <div />
             </div>
           )}
@@ -458,7 +438,8 @@ export default function WYSIWYGCanvas({
                 transformOrigin: 'center center',
                 opacity: logoTransform.opacity,
                 mixBlendMode: logoTransform.blendMode,
-                zIndex: 30,
+                touchAction: 'none', // Direct touch-manipulation strictly on logo
+                zIndex: 20,
               }}
               onPointerDown={handleLogoPointerDown}
               className={`group/logo cursor-move select-none ${
@@ -484,7 +465,7 @@ export default function WYSIWYGCanvas({
                     style={{
                       transform: 'translate(-50%, -100%)',
                     }}
-                    className="absolute top-[-10px] left-1/2 flex items-center gap-1 p-1 bg-zinc-900/95 backdrop-blur-md text-white rounded-lg shadow-lg border border-white/10 z-40"
+                    className="absolute top-[-8px] left-1/2 flex items-center gap-0.5 p-1 bg-zinc-900/95 backdrop-blur-md text-white rounded-lg shadow-lg border border-white/10 z-20"
                     onPointerDown={(e) => e.stopPropagation()}
                   >
                     <button
@@ -496,7 +477,7 @@ export default function WYSIWYGCanvas({
                       title="Rotate 90°"
                       className="p-1 rounded hover:bg-white/20 transition-colors"
                     >
-                      <RotateCw size={13} />
+                      <RotateCw size={12} />
                     </button>
                     <button
                       onClick={() =>
@@ -508,51 +489,47 @@ export default function WYSIWYGCanvas({
                       title="Center Logo"
                       className="p-1 rounded hover:bg-white/20 transition-colors"
                     >
-                      <Maximize2 size={13} />
+                      <Maximize2 size={12} />
                     </button>
                     <button
                       onClick={onRemoveLogo}
                       title="Remove Logo"
                       className="p-1 rounded hover:bg-red-500/30 text-red-300 transition-colors"
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={12} />
                     </button>
                   </div>
 
                   {/* Top Rotation Knob Stem */}
                   <div
                     style={{ transform: 'translateX(-50%)' }}
-                    className="absolute top-[-22px] left-1/2 w-4 h-4 rounded-full bg-white border-2 border-sky-500 shadow-md flex items-center justify-center cursor-crosshair z-40"
+                    className="absolute top-[-20px] left-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-sky-500 shadow-md flex items-center justify-center cursor-crosshair z-20"
                     onPointerDown={handleRotateHandleDown}
                     title="Drag to rotate"
                   >
-                    <div className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                    <div className="w-1 h-1 rounded-full bg-sky-500" />
                   </div>
                   <div
                     style={{ transform: 'translateX(-50%)' }}
-                    className="absolute top-[-10px] left-1/2 w-[1px] h-[12px] bg-sky-400 pointer-events-none"
+                    className="absolute top-[-8px] left-1/2 w-[1px] h-[12px] bg-sky-400 pointer-events-none"
                   />
 
                   {/* 4 Corner Resize Handles */}
-                  {/* NW - Top Left */}
                   <div
                     onPointerDown={(e) => handleResizeHandleDown(e, 'resize-logo-nw')}
-                    className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nwse-resize z-40"
+                    className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nwse-resize z-20"
                   />
-                  {/* NE - Top Right */}
                   <div
                     onPointerDown={(e) => handleResizeHandleDown(e, 'resize-logo-ne')}
-                    className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nesw-resize z-40"
+                    className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nesw-resize z-20"
                   />
-                  {/* SW - Bottom Left */}
                   <div
                     onPointerDown={(e) => handleResizeHandleDown(e, 'resize-logo-sw')}
-                    className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nesw-resize z-40"
+                    className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nesw-resize z-20"
                   />
-                  {/* SE - Bottom Right */}
                   <div
                     onPointerDown={(e) => handleResizeHandleDown(e, 'resize-logo-se')}
-                    className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nwse-resize z-40"
+                    className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-sky-500 rounded-sm shadow-sm cursor-nwse-resize z-20"
                   />
                 </>
               )}
@@ -562,35 +539,17 @@ export default function WYSIWYGCanvas({
           {/* Prompt to add logo if main image is loaded but logo isn't */}
           {!logoImage && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-              <div className="pointer-events-auto px-4 py-2.5 rounded-2xl bg-zinc-900/85 backdrop-blur-md text-white shadow-xl flex items-center gap-2 border border-white/10">
-                <Layers size={16} className="text-sky-400" />
-                <span className="text-xs font-medium">Add a PNG logo to place on photo</span>
+              <div className="pointer-events-auto px-4 py-2 rounded-2xl bg-zinc-900/90 backdrop-blur-md text-white shadow-xl flex items-center gap-2 border border-white/10">
+                <Layers size={14} className="text-sky-400" />
+                <span className="text-xs font-medium">Place a PNG logo</span>
                 <button
                   onClick={onOpenLogoPicker}
-                  className="ml-2 px-3 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-white font-medium text-xs transition-colors shadow-sm"
+                  className="ml-1 px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-white font-medium text-xs transition-colors shadow-sm"
                 >
-                  Upload Logo
+                  Upload
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Bottom Hint Banner */}
-      {mainImage && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-3 px-3 py-1.5 rounded-full bg-white/90 backdrop-blur-md border border-zinc-200 shadow-sm text-[11px] text-zinc-500 pointer-events-none">
-          <span className="flex items-center gap-1">
-            <Move size={11} className="text-zinc-700" />
-            <span>Drag image to crop</span>
-          </span>
-          <span className="text-zinc-300">·</span>
-          <span>Scroll/pinch to zoom</span>
-          {logoImage && (
-            <>
-              <span className="text-zinc-300">·</span>
-              <span className="text-zinc-800 font-medium">Corner handles resize logo</span>
-            </>
           )}
         </div>
       )}
